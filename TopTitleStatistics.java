@@ -108,6 +108,7 @@ public class TopTitleStatistics extends Configured implements Tool {
 // <<< Don't Change
 
     public static class TitleCountMap extends Mapper<Object, Text, Text, IntWritable> {
+	public static final Log log = LogFactory.getLog(TitleCountMap.class);
         List<String> stopWords;
         String delimiters;
 
@@ -127,6 +128,16 @@ public class TopTitleStatistics extends Configured implements Tool {
         @Override
         public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
             // TODO
+		String line = value.toString();
+            	StringTokenizer tokenizer = new StringTokenizer(line, this.delimiters);
+            	while (tokenizer.hasMoreTokens()) {
+                	String nextToken = tokenizer.nextToken().trim().toLowerCase();
+                	if (!this.stopWords.contains(nextToken)) {
+//if (nextToken == "school") log.info("Line: " + new Text(line) + "#Token: " + new Text(nextToken));
+//if (nextToken == "school") log.debug("Line: " + new Text(line) + "#Token: " + new Text(nextToken));
+                    		context.write(new Text(nextToken), new IntWritable(1));
+                	}
+            	}
         }
     }
 
@@ -134,12 +145,18 @@ public class TopTitleStatistics extends Configured implements Tool {
         @Override
         public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
             // TODO
+    	    int sum = 0;
+            for (IntWritable val : values) {
+                sum += val.get();
+            }
+            context.write(key, new IntWritable(sum));
         }
     }
 
     public static class TopTitlesStatMap extends Mapper<Text, Text, NullWritable, TextArrayWritable> {
         Integer N;
         // TODO
+        private TreeSet<Pair<Integer, String>> countToTitleMap = new TreeSet<Pair<Integer, String>>();
 
         @Override
         protected void setup(Context context) throws IOException,InterruptedException {
@@ -150,17 +167,31 @@ public class TopTitleStatistics extends Configured implements Tool {
         @Override
         public void map(Text key, Text value, Context context) throws IOException, InterruptedException {
             // TODO
+            Integer count = Integer.parseInt(value.toString());
+            String title = key.toString();
+
+            countToTitleMap.add(new Pair<Integer, String>(count, title));
+
+            if (countToTitleMap.size() > N) {
+                countToTitleMap.remove(countToTitleMap.first());
+            }
         }
 
         @Override
         protected void cleanup(Context context) throws IOException, InterruptedException {
             // TODO
+            for (Pair<Integer, String> item : countToTitleMap) {
+                String[] strings = {item.second, item.first.toString()};
+                TextArrayWritable val = new TextArrayWritable(strings);
+                context.write(NullWritable.get(), val);
+            }
         }
     }
 
     public static class TopTitlesStatReduce extends Reducer<NullWritable, TextArrayWritable, Text, IntWritable> {
         Integer N;
         // TODO
+        private TreeSet<Pair<Integer, String>> countToTitleMap = new TreeSet<Pair<Integer, String>>();
 
         @Override
         protected void setup(Context context) throws IOException,InterruptedException {
@@ -173,6 +204,41 @@ public class TopTitleStatistics extends Configured implements Tool {
             Integer sum, mean, max, min, var;
 
             // TODO
+            for (TextArrayWritable val: values) {
+                Text[] pair= (Text[]) val.toArray();
+
+                String title = pair[0].toString();
+                Integer count = Integer.parseInt(pair[1].toString());
+
+                countToTitleMap.add(new Pair<Integer, String>(count, title));
+
+                if (countToTitleMap.size() > N) {
+                    countToTitleMap.remove(countToTitleMap.first());
+                }
+            }
+
+	    sum = 0; max = 0; min = Integer.MAX_VALUE;
+            for (Pair<Integer, String> item: countToTitleMap) {
+                Text title = new Text(item.second);
+                Integer value = item.first;
+                
+		sum += value;
+		max = (max < value) ? value : max;
+		min = (min > value) ? value : min;
+            }
+	    mean = sum / countToTitleMap.size();
+
+	    var = 0;
+            for (Pair<Integer, String> item: countToTitleMap) {
+                Text title = new Text(item.second);
+                Integer value = item.first;
+                
+		//var += (value - mean) ^ 2;
+		//import java.util.Math;
+		//var += Math.pow(value - mean, 2);
+		var += (value - mean) * (value - mean);
+            }
+	    var = var / countToTitleMap.size();
 
             context.write(new Text("Mean"), new IntWritable(mean));
             context.write(new Text("Sum"), new IntWritable(sum));
