@@ -12,6 +12,7 @@ import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
 import org.apache.hadoop.mapreduce.lib.input.KeyValueTextInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
@@ -51,14 +52,101 @@ public class TopPopularLinks extends Configured implements Tool {
     @Override
     public int run(String[] args) throws Exception {
         // TODO
+        Configuration conf = this.getConf();
+        FileSystem fs = FileSystem.get(conf);
+        Path tmpPath = new Path("/mp2/tmp");
+        fs.delete(tmpPath, true);
+
+        Job jobA = Job.getInstance(conf, "Count nInLinks");
+        jobA.setJarByClass(TopPopularLinks.class);
+
+        FileInputFormat.setInputPaths(jobA, new Path(args[0]));
+        //FileInputFormat.setInputPaths(jobA, tmpPath);
+        jobA.setInputFormatClass(TextInputFormat.class);
+
+        jobA.setMapperClass(LinkCountMap.class);
+        jobA.setMapOutputKeyClass(IntWritable.class);
+        jobA.setMapOutputValueClass(IntWritable.class);
+
+        jobA.setReducerClass(LinkCountReduce.class);
+        //jobA.setNumReduceTasks(1);
+
+        jobA.setOutputKeyClass(IntWritable.class);
+        jobA.setOutputValueClass(IntWritable.class);
+
+        //FileOutputFormat.setOutputPath(jobA, new Path(args[1]));
+        FileOutputFormat.setOutputPath(jobA, tmpPath);
+        jobA.setOutputFormatClass(TextOutputFormat.class);
+
+        //return jobA.waitForCompletion(true) ? 0 : 1;
+        jobA.waitForCompletion(true);
+
+        Job JobB = Job.getInstance(conf, "Sort & Filter nInLinks");
+        JobB.setJarByClass(TopPopularLinks.class);
+
+        //FileInputFormat.setInputPaths(JobB, new Path(args[0]));
+        FileInputFormat.setInputPaths(JobB, tmpPath);
+        JobB.setInputFormatClass(KeyValueTextInputFormat.class);
+
+        JobB.setMapperClass(TopLinksMap.class);
+        JobB.setMapOutputKeyClass(NullWritable.class);
+        JobB.setMapOutputValueClass(IntArrayWritable.class);
+
+        JobB.setReducerClass(TopLinksReduce.class);
+        JobB.setNumReduceTasks(1);
+
+        JobB.setOutputKeyClass(IntWritable.class);
+        JobB.setOutputValueClass(IntWritable.class);
+
+        FileOutputFormat.setOutputPath(JobB, new Path(args[1]));
+        //FileOutputFormat.setOutputPath(JobB, tmpPath);
+        JobB.setOutputFormatClass(TextOutputFormat.class);
+
+        return JobB.waitForCompletion(true) ? 0 : 1;
+        //JobB.waitForCompletion(true);
+
     }
 
     public static class LinkCountMap extends Mapper<Object, Text, IntWritable, IntWritable> {
         // TODO
+	public static final Log log = LogFactory.getLog(LinkCountMap.class);
+
+        @Override
+        public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+
+		String line = value.toString();
+            	StringTokenizer tokenizer = new StringTokenizer(line, " :");
+
+		// Page is not necessarily linked to itself
+                Integer pageId = Integer.valueOf(tokenizer.nextToken().trim());
+		//context.write(new IntWritable(pageId), new IntWritable(0));
+
+		// Outlinks only
+            	while (tokenizer.hasMoreTokens()) {
+                	pageId = Integer.valueOf(tokenizer.nextToken().trim());
+//if (nextToken == "school") log.info("Line: " + new Text(line) + "#Token: " + new Text(nextToken));
+//if (nextToken == "school") log.debug("Line: " + new Text(line) + "#Token: " + new Text(nextToken));
+                    	
+			context.write(new IntWritable(pageId), new IntWritable(1));
+            	}
+        }
     }
 
     public static class LinkCountReduce extends Reducer<IntWritable, IntWritable, IntWritable, IntWritable> {
         // TODO
+        @Override
+        public void reduce(IntWritable key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
+            
+    	    int nInLinks = 0;
+            
+
+	    for (IntWritable val : values) {
+                nInLinks += val.get();
+            }
+	    
+	    //if (nInLinks > 0)
+            	context.write(key, new IntWritable(nInLinks));
+        }
     }
 
     public static class TopLinksMap extends Mapper<Text, Text, NullWritable, IntArrayWritable> {
@@ -70,6 +158,31 @@ public class TopPopularLinks extends Configured implements Tool {
             this.N = conf.getInt("N", 10);
         }
         // TODO
+
+        private TreeSet<Pair<Integer, Integer>> nInLinksPageIdSet = new TreeSet<Pair<Integer, Integer>>();
+
+        @Override
+        public void map(Text key, Text value, Context context) throws IOException, InterruptedException {
+
+	    Integer pageId = Integer.parseInt(key.toString());
+            Integer nInLinks = Integer.parseInt(value.toString());
+
+            nInLinksPageIdSet.add(new Pair<Integer, Integer>(nInLinks, pageId));
+
+            if (nInLinksPageIdSet.size() > N) {
+                nInLinksPageIdSet.remove(nInLinksPageIdSet.first());
+            }
+        }
+
+        @Override
+        protected void cleanup(Context context) throws IOException, InterruptedException {
+
+            for (Pair<Integer, Integer> item : nInLinksPageIdSet) {
+                Integer[] ints = {item.first, item.second};
+                IntArrayWritable val = new IntArrayWritable(ints);
+                context.write(NullWritable.get(), val);
+            }
+        }
     }
 
     public static class TopLinksReduce extends Reducer<NullWritable, IntArrayWritable, IntWritable, IntWritable> {
@@ -81,6 +194,31 @@ public class TopPopularLinks extends Configured implements Tool {
             this.N = conf.getInt("N", 10);
         }
         // TODO
+
+        private TreeSet<Pair<Integer, Integer>> nInLinksPageIdSet = new TreeSet<Pair<Integer, Integer>>();
+
+        @Override
+        public void reduce(NullWritable key, Iterable<IntArrayWritable> values, Context context) throws IOException, InterruptedException {
+            // TODO
+            for (IntArrayWritable val: values) {
+                IntWritable[] pair= (IntWritable[]) val.toArray();
+
+                Integer nInLinks = pair[0].get();
+                Integer pageId = pair[1].get();
+
+                nInLinksPageIdSet.add(new Pair<Integer, Integer>(nInLinks, pageId));
+
+                if (nInLinksPageIdSet.size() > N) {
+                    nInLinksPageIdSet.remove(nInLinksPageIdSet.first());
+                }
+            }
+
+            for (Pair<Integer, Integer> item: nInLinksPageIdSet) {
+                IntWritable pageId = new IntWritable(item.second);            
+                IntWritable nInLinks = new IntWritable(item.first);
+                context.write(pageId, nInLinks);
+            }
+        }
     }
 }
 
