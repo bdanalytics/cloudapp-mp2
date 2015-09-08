@@ -1,6 +1,6 @@
 #!/bin/bash
-export MYINPUT=/mp2/titles
-export MYOUTPUT=/mp2/A-output
+export MYINPUT=/mp2/$2
+export MYOUTPUT=/mp2/$3-output
 
 hadoop fs -rm -r $MYOUTPUT
 hadoop jar $1.jar $1 -D stopwords=/mp2/misc/stopwords.txt -D delimiters=/mp2/misc/delimiters.txt $MYINPUT $MYOUTPUT
